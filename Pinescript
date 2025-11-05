@@ -1,0 +1,412 @@
+//@version=6
+indicator("Hydrodynamic Flow Phases — Multi-TF (Universal)", overlay=true, max_labels_count=500)
+
+//──────────────────── USER CONTROLS ────────────────────
+calc_tf = input.string(
+     defval = "60",
+     title = "Analysis timeframe",
+     options = [
+         "1","2","3","5","10","15","30","45","95",
+         "60","120","180","240",
+         "1D","2D","3D",
+         "1W","1M","3M","6M","12M"
+     ],
+     tooltip = "Choose analysis timeframe for phase computation")
+
+// ATR lengths
+lenATR_1   = input.int(8,  "ATR Len (1m)")
+lenATR_2   = input.int(8,  "ATR Len (2m)")
+lenATR_3   = input.int(9,  "ATR Len (3m)")
+lenATR_5   = input.int(10, "ATR Len (5m)")
+lenATR_10  = input.int(10, "ATR Len (10m)")
+lenATR_15  = input.int(12, "ATR Len (15m)")
+lenATR_30  = input.int(14, "ATR Len (30m)")
+lenATR_45  = input.int(14, "ATR Len (45m)")
+lenATR_95  = input.int(14, "ATR Len (95m)")
+lenATR_60  = input.int(14, "ATR Len (60m)")
+lenATR_120 = input.int(16, "ATR Len (120m / 2h)")
+lenATR_180 = input.int(18, "ATR Len (180m / 3h)")
+lenATR_240 = input.int(20, "ATR Len (240m / 4h)")
+lenATR_1D  = input.int(20, "ATR Len (1D)")
+lenATR_2D  = input.int(20, "ATR Len (2D)")
+lenATR_3D  = input.int(20, "ATR Len (3D)")
+lenATR_1W  = input.int(14, "ATR Len (1W)")
+lenATR_1M  = input.int(12, "ATR Len (1M)")
+lenATR_3M  = input.int(10, "ATR Len (3M)")
+lenATR_6M  = input.int(8,  "ATR Len (6M)")
+lenATR_12M = input.int(6,  "ATR Len (12M)")
+
+// Volume SMA
+lenVol_1   = input.int(20, "Vol SMA (1m)")
+lenVol_2   = input.int(20, "Vol SMA (2m)")
+lenVol_3   = input.int(20, "Vol SMA (3m)")
+lenVol_5   = input.int(20, "Vol SMA (5m)")
+lenVol_10  = input.int(20, "Vol SMA (10m)")
+lenVol_15  = input.int(20, "Vol SMA (15m)")
+lenVol_30  = input.int(20, "Vol SMA (30m)")
+lenVol_45  = input.int(20, "Vol SMA (45m)")
+lenVol_95  = input.int(20, "Vol SMA (95m)")
+lenVol_60  = input.int(20, "Vol SMA (60m)")
+lenVol_120 = input.int(20, "Vol SMA (120m)")
+lenVol_180 = input.int(20, "Vol SMA (180m)")
+lenVol_240 = input.int(20, "Vol SMA (240m)")
+lenVol_1D  = input.int(20, "Vol SMA (1D)")
+lenVol_2D  = input.int(20, "Vol SMA (2D)")
+lenVol_3D  = input.int(20, "Vol SMA (3D)")
+lenVol_1W  = input.int(20, "Vol SMA (1W)")
+lenVol_1M  = input.int(20, "Vol SMA (1M)")
+lenVol_3M  = input.int(20, "Vol SMA (3M)")
+lenVol_6M  = input.int(20, "Vol SMA (6M)")
+lenVol_12M = input.int(20, "Vol SMA (12M)")
+
+// ROC per TF
+roc_len_1   = input.int(2, "ROC Len (1m)")
+roc_len_2   = input.int(2, "ROC Len (2m)")
+roc_len_3   = input.int(2, "ROC Len (3m)")
+roc_len_5   = input.int(2, "ROC Len (5m)")
+roc_len_10  = input.int(2, "ROC Len (10m)")
+roc_len_15  = input.int(2, "ROC Len (15m)")
+roc_len_30  = input.int(3, "ROC Len (30m)")
+roc_len_45  = input.int(3, "ROC Len (45m)")
+roc_len_95  = input.int(3, "ROC Len (95m)")
+roc_len_60  = input.int(3, "ROC Len (60m)")
+roc_len_120 = input.int(4, "ROC Len (120m)")
+roc_len_180 = input.int(4, "ROC Len (180m)")
+roc_len_240 = input.int(4, "ROC Len (240m)")
+roc_len_1D  = input.int(5, "ROC Len (1D)")
+roc_len_2D  = input.int(5, "ROC Len (2D)")
+roc_len_3D  = input.int(5, "ROC Len (3D)")
+roc_len_1W  = input.int(6, "ROC Len (1W)")
+roc_len_1M  = input.int(6, "ROC Len (1M)")
+roc_len_3M  = input.int(7, "ROC Len (3M)")
+roc_len_6M  = input.int(8, "ROC Len (6M)")
+roc_len_12M = input.int(9, "ROC Len (12M)")
+
+// Modes & thresholds
+auto_mode   = input.bool(true, "Auto-calibrate thresholds (mean±stdev)", inline="m")
+winCal      = input.int(120, "Calibration lookback (bars)", inline="m", tooltip="Window used for mean/std on the analysis TF")
+
+kConv_ATR   = input.float(0.25, "ATR% stdev factor: Convective", step=0.05)
+kTurb_ATR   = input.float(0.90, "ATR% stdev factor: Turbulent",  step=0.05)
+
+auto_rv     = input.bool(true, "Auto RelVol thresholds", inline="rv")
+kConv_RV    = input.float(0.75, "RelVol stdev factor: Conv", inline="rv", step=0.05)
+kTurb_RV    = input.float(2.00, "RelVol stdev factor: Turb", inline="rv", step=0.05)
+
+// Manual fallbacks
+lam_atr_m   = input.float(0.030, "Manual ATR%: Laminar ceiling")
+tur_atr_m   = input.float(0.060, "Manual ATR%: Turbulent floor")
+lam_rv_m    = input.float(1.25,  "Manual RelVol: Laminar max")
+turb_rv_m   = input.float(4.00,  "Manual RelVol: Turbulent min")
+conv_min_roc= input.float(-0.01, "Convective min ROC filter")
+
+//──────────────────── THEME / COLORS ────────────────────
+groupTheme  = "Theme / Colors"
+
+// Toggle & selection
+use_theme   = input.bool(true, "Enable Environment Theme", group=groupTheme)
+theme_pick  = input.string("Mountain Forest", "Theme",
+                 options = ["Mountain Forest", "Glacial Melt", "Canyon River", "OCR High-Contrast", "Custom"],
+                 group=groupTheme)
+
+// Custom overrides if theme == Custom
+cLam_custom = input.color(color.rgb(0, 255,   0), "Laminar (custom)", group=groupTheme)
+cConv_custom= input.color(color.rgb(255,215,  0), "Convective (custom)", group=groupTheme)
+cTur_custom = input.color(color.rgb(255, 48, 48), "Turbulent (custom)", group=groupTheme)
+cDis_custom = input.color(color.rgb( 30,144,255), "Dissipative (custom)", group=groupTheme)
+
+// Background opacity
+bg_opacity = input.int(70, "Background opacity (0–100)", minval=0, maxval=100, group=groupTheme)
+
+// OCR default (fallback)
+cLam_OCR  = color.rgb(0, 255,   0)
+cConv_OCR = color.rgb(255,215,  0)
+cTur_OCR  = color.rgb(255, 48, 48)
+cDis_OCR  = color.rgb( 30,144,255)
+
+// Theme palettes
+// 1) Mountain Forest
+cLam_MFF  = color.rgb(36, 122, 76)
+cConv_MFF = color.rgb(209,162, 31)
+cTur_MFF  = color.rgb(10, 44,115)
+cDis_MFF  = color.rgb(106,146,166)
+
+// 2) Glacial Melt
+cLam_GLA  = color.rgb(54,162,113)
+cConv_GLA = color.rgb(222,203,115)
+cTur_GLA  = color.rgb(0, 92,175)
+cDis_GLA  = color.rgb(181,205,218)
+
+// 3) Canyon River
+cLam_CAN  = color.rgb(160,139, 98)
+cConv_CAN = color.rgb(203,126, 17)
+cTur_CAN  = color.rgb(0, 87,146)
+cDis_CAN  = color.rgb(120,133,150)
+
+//──────────────────── Resolve Theme Colors ────────────────────
+
+// Function for safe selection
+f_theme_color(_pick, _mff, _gla, _can, _ocr, _custom) =>
+     _pick == "Mountain Forest"    ? _mff  :
+     _pick == "Glacial Melt"       ? _gla  :
+     _pick == "Canyon River"       ? _can  :
+     _pick == "OCR High-Contrast"  ? _ocr  :
+                                     _custom
+
+// Apply theme + fallback
+cLam = use_theme ? f_theme_color(theme_pick, cLam_MFF, cLam_GLA, cLam_CAN, cLam_OCR, cLam_custom) : cLam_OCR
+cConv= use_theme ? f_theme_color(theme_pick, cConv_MFF, cConv_GLA, cConv_CAN, cConv_OCR, cConv_custom) : cConv_OCR
+cTur = use_theme ? f_theme_color(theme_pick, cTur_MFF, cTur_GLA, cTur_CAN, cTur_OCR, cTur_custom) : cTur_OCR
+cDis = use_theme ? f_theme_color(theme_pick, cDis_MFF, cDis_GLA, cDis_CAN, cDis_OCR, cDis_custom) : cDis_OCR
+
+
+//──────────────────── MAP SETTINGS ────────────────────
+var int lenATR = 14
+var int lenVol = 20
+var int rocLen = 3
+if      calc_tf == "1"
+    lenATR := lenATR_1,   lenVol := lenVol_1,   rocLen := roc_len_1
+else if calc_tf == "2"
+    lenATR := lenATR_2,   lenVol := lenVol_2,   rocLen := roc_len_2
+else if calc_tf == "3"
+    lenATR := lenATR_3,   lenVol := lenVol_3,   rocLen := roc_len_3
+else if calc_tf == "5"
+    lenATR := lenATR_5,   lenVol := lenVol_5,   rocLen := roc_len_5
+else if calc_tf == "10"
+    lenATR := lenATR_10,  lenVol := lenVol_10,  rocLen := roc_len_10
+else if calc_tf == "15"
+    lenATR := lenATR_15,  lenVol := lenVol_15,  rocLen := roc_len_15
+else if calc_tf == "30"
+    lenATR := lenATR_30,  lenVol := lenVol_30,  rocLen := roc_len_30
+else if calc_tf == "45"
+    lenATR := lenATR_45,  lenVol := lenVol_45,  rocLen := roc_len_45
+else if calc_tf == "95"
+    lenATR := lenATR_95,  lenVol := lenVol_95,  rocLen := roc_len_95
+else if calc_tf == "60"
+    lenATR := lenATR_60,  lenVol := lenVol_60,  rocLen := roc_len_60
+else if calc_tf == "120"
+    lenATR := lenATR_120, lenVol := lenVol_120, rocLen := roc_len_120
+else if calc_tf == "180"
+    lenATR := lenATR_180, lenVol := lenVol_180, rocLen := roc_len_180
+else if calc_tf == "240"
+    lenATR := lenATR_240, lenVol := lenVol_240, rocLen := roc_len_240
+else if calc_tf == "1D"
+    lenATR := lenATR_1D,  lenVol := lenVol_1D,  rocLen := roc_len_1D
+else if calc_tf == "2D"
+    lenATR := lenATR_2D,  lenVol := lenVol_2D,  rocLen := roc_len_2D
+else if calc_tf == "3D"
+    lenATR := lenATR_3D,  lenVol := lenVol_3D,  rocLen := roc_len_3D
+else if calc_tf == "1W"
+    lenATR := lenATR_1W,  lenVol := lenVol_1W,  rocLen := roc_len_1W
+else if calc_tf == "1M"
+    lenATR := lenATR_1M,  lenVol := lenVol_1M,  rocLen := roc_len_1M
+else if calc_tf == "3M"
+    lenATR := lenATR_3M,  lenVol := lenVol_3M,  rocLen := roc_len_3M
+else if calc_tf == "6M"
+    lenATR := lenATR_6M,  lenVol := lenVol_6M,  rocLen := roc_len_6M
+else
+    lenATR := lenATR_12M, lenVol := lenVol_12M, rocLen := roc_len_12M
+
+//──────────────────── SERIES ────────────────────
+srcClose = request.security(syminfo.tickerid, calc_tf, close)
+srcVol   = request.security(syminfo.tickerid, calc_tf, volume)
+
+atr_abs  = request.security(syminfo.tickerid, calc_tf, ta.atr(lenATR))
+atrp     = atr_abs / srcClose
+volMA    = request.security(syminfo.tickerid, calc_tf, ta.sma(srcVol, lenVol))
+vol_rel  = nz(srcVol) / math.max(nz(volMA), 1)
+roc      = request.security(syminfo.tickerid, calc_tf, ta.roc(srcClose, rocLen))
+
+//──────────────────── AUTO CALIBRATION ────────────────────
+atrp_mean = ta.sma(atrp, winCal)
+atrp_std  = ta.stdev(atrp, winCal)
+rv_mean   = ta.sma(vol_rel, winCal)
+rv_std    = ta.stdev(vol_rel, winCal)
+
+lam_atr = auto_mode ? nz(atrp_mean) : lam_atr_m
+conv_atr= auto_mode ? nz(atrp_mean) + kConv_ATR * nz(atrp_std) : (lam_atr_m + (tur_atr_m - lam_atr_m) * 0.5)
+tur_atr = auto_mode ? nz(atrp_mean) + kTurb_ATR * nz(atrp_std) : tur_atr_m
+
+lam_rv  = auto_rv ? nz(rv_mean) + 0.00 * nz(rv_std) : lam_rv_m
+turb_rv = auto_rv ? nz(rv_mean) + kTurb_RV * nz(rv_std) : turb_rv_m
+conv_rv = auto_rv ? nz(rv_mean) + kConv_RV * nz(rv_std) : math.max(lam_rv_m, 2.0)
+
+// Guards
+lam_atr := na(lam_atr) ? lam_atr_m : lam_atr
+conv_atr:= na(conv_atr)? (lam_atr + (tur_atr - lam_atr)*0.5) : conv_atr
+tur_atr := na(tur_atr) ? tur_atr_m : tur_atr
+lam_rv  := na(lam_rv)  ? lam_rv_m  : lam_rv
+conv_rv := na(conv_rv) ? math.max(lam_rv, 2.0) : conv_rv
+turb_rv := na(turb_rv) ? turb_rv_m : turb_rv
+
+//──────────────────── PHASE ────────────────────
+is_lam = (atrp <= lam_atr) and (vol_rel <= lam_rv)
+is_tur = (atrp >= tur_atr) and (vol_rel >= turb_rv)
+is_con = not is_lam and not is_tur and (roc >= conv_min_roc) and (vol_rel >= conv_rv)
+is_dis = not is_lam and not is_tur and not is_con
+phase = is_lam ? "Laminar" : is_tur ? "Turbulent" : is_con ? "Convective" : "Dissipative"
+
+//──────────────────── VISUALS ────────────────────
+cLamBG = color.new(cLam, bg_opacity)
+cConvBG= color.new(cConv, math.max(0, math.min(100, bg_opacity - 10)))
+cTurBG = color.new(cTur, bg_opacity)
+cDisBG = color.new(cDis, bg_opacity)
+bgcolor(is_tur ? cTurBG : is_con ? cConvBG : is_lam ? cLamBG : cDisBG, title="Phase Colour")
+plotshape(is_con, title="Convective start", style=shape.triangleup,   color=cConv, location=location.belowbar, size=size.tiny)
+plotshape(is_dis, title="Dissipative start", style=shape.triangledown, color=cDis, location=location.abovebar, size=size.tiny)
+plot(lam_atr*100,  "ATR% Laminar", display=display.none)
+plot(conv_atr*100, "ATR% Conv",    display=display.none)
+plot(tur_atr*100,  "ATR% Turb",    display=display.none)
+plot(lam_rv,       "RV Laminar",   display=display.none)
+plot(conv_rv,      "RV Conv",      display=display.none)
+plot(turb_rv,      "RV Turb",      display=display.none)
+
+//──────────────────── FLOW-ODDS (Ignite/Hold/Vent) ────────────────────
+f_clip(x, lo, hi) => math.max(lo, math.min(hi, x))
+f_pos(x) => math.max(0.0, x)
+f_neg(x) => math.max(0.0, -x)
+
+var int lam_streak = 0
+lam_streak := is_lam ? lam_streak + 1 : 0
+streak_norm = f_clip(lam_streak / 8.0, 0.0, 1.0)
+
+atr_slope  = atrp - nz(atrp[1])
+rv_z_raw   = rv_std > 0 ? (vol_rel - rv_mean) / rv_std : 0.0
+rv_z_pos   = f_pos(rv_z_raw)
+rv_z_abs   = math.abs(rv_z_raw)
+
+vwap_tf_raw = request.security(syminfo.tickerid, calc_tf, ta.vwap)
+sma20_tf    = request.security(syminfo.tickerid, calc_tf, ta.sma(srcClose, 20))
+vwap_tf     = na(vwap_tf_raw) ? sma20_tf : vwap_tf_raw
+anchor      = (srcClose - vwap_tf) / vwap_tf
+anchor_up   = f_neg(anchor)
+anchor_dn   = f_pos(anchor)
+
+rsi_tf   = request.security(syminfo.tickerid, calc_tf, ta.rsi(srcClose, 14))
+tilt_up  = f_pos((rsi_tf - 50.0) / 20.0)
+tilt_dn  = f_pos((50.0 - rsi_tf) / 20.0)
+
+// Weights
+w_streak  = input.float(0.9, "W: Streak", step=0.1)
+w_rv      = input.float(0.8, "W: RV z+", step=0.1)
+w_anchor  = input.float(0.7, "W: VWAP anchor", step=0.1)
+w_slope   = input.float(0.5, "W: ATR slope", step=0.1)
+w_tilt    = input.float(0.5, "W: RSI tilt", step=0.1)
+
+score_up = w_streak*streak_norm + w_rv*rv_z_pos + w_anchor*anchor_up + w_slope*f_pos(atr_slope) + w_tilt*tilt_up
+score_dn = w_streak*streak_norm + w_rv*rv_z_pos*0.5 + w_anchor*anchor_dn + w_slope*f_neg(atr_slope) + w_tilt*tilt_dn
+
+hold_core   = (1.0 - f_clip(rv_z_abs / 1.5, 0.0, 1.0)) * (1.0 - f_clip(math.abs(atr_slope) / 0.001, 0.0, 1.0))
+hold_anchor = 1.0 - f_clip(math.abs(anchor) / 0.004, 0.0, 1.0)
+score_hold  = 0.7*hold_core + 0.3*hold_anchor
+
+e_up   = math.exp(score_up)
+e_dn   = math.exp(score_dn)
+e_hold = math.exp(score_hold)
+den    = e_up + e_dn + e_hold + 1e-9
+p_up   = 100.0 * e_up   / den
+p_dn   = 100.0 * e_dn   / den
+p_hold = 100.0 * e_hold / den
+
+//──────────────────── Turbulent Burst: probability & direction ────────────────────
+dist_atr = (tur_atr - conv_atr) != 0 ? f_clip((atrp - conv_atr) / (tur_atr - conv_atr), 0.0, 1.0) : 0.0
+dist_rv  = (turb_rv - conv_rv) != 0 ? f_clip((vol_rel - conv_rv) / (turb_rv - conv_rv), 0.0, 1.0) : 0.0
+energy   = 0.6*dist_atr + 0.4*dist_rv
+
+dir_score   = (p_up - p_dn)/100.0 + 0.6*(anchor_up - anchor_dn) + 0.4*(f_pos(atr_slope) - f_neg(atr_slope)) + 0.3*(tilt_up - tilt_dn)
+dir_prob_up = 100.0 * (1.0 / (1.0 + math.exp(-2.0*dir_score)))
+
+non_hold    = f_clip((p_up + p_dn)/100.0, 0.0, 1.0)
+regBoost    = (is_con or is_tur) ? 1.10 : 1.00
+turb_prob   = f_clip((0.65*energy + 0.35*non_hold) * regBoost, 0.0, 1.0) * 100.0
+
+dir_txt = dir_prob_up > 55 ? "Up-bias" : dir_prob_up < 45 ? "Down-bias" : "Neutral"
+
+// Diagnostics (hidden)
+plot(dist_atr*100, "ATR→Turb %", display=display.none)
+plot(dist_rv*100,  "RV→Turb %",  display=display.none)
+plot(energy*100,   "Energy %",   display=display.none)
+
+//──────────────────── LIVE t+1 (Projected, may repaint) ────────────────────
+live_non_hold = f_clip((p_up + p_dn)/100.0, 0.0, 1.0)
+live_tur      = f_clip((0.65*energy + 0.35*live_non_hold) * ((is_con or is_tur) ? 1.10 : 1.00), 0.0, 1.0)
+live_lam      = f_clip((p_hold/100.0) * (1.0 - live_tur), 0.0, 1.0)
+live_rem      = f_clip(1.0 - live_tur - live_lam, 0.0, 1.0)
+live_bal_dir  = 1.0 - math.abs(dir_prob_up/100.0 - 0.5)*2.0
+live_conv     = f_clip(live_rem * (0.65*live_non_hold + 0.35*live_bal_dir), 0.0, live_rem)
+live_dis      = f_clip(1.0 - live_tur - live_lam - live_conv, 0.0, 1.0)
+
+//──────────────────── NEXT-BAR (t+1) FROZEN — Non-repainting ────────────────────
+// Detect the boundary of the analysis timeframe: when a new calc_tf bar begins on the chart
+calc_time      = request.security(syminfo.tickerid, calc_tf, time)
+is_calc_newbar = ta.change(calc_time) != 0  // true on the first chart bar of a new calc_tf candle (so prior bar closed it)
+
+var float nb_p_up   = na
+var float nb_p_dn   = na
+var float nb_p_hold = na
+var float nb_turb   = na
+var float nb_dir_up = na
+
+// Snapshot the just-closed calc_tf bar scores as priors for the upcoming bar
+if is_calc_newbar
+    nb_p_up   := p_up[1]
+    nb_p_dn   := p_dn[1]
+    nb_p_hold := p_hold[1]
+    nb_turb   := turb_prob[1]
+    nb_dir_up := dir_prob_up[1]
+
+// Derive 4-state distribution for next bar from frozen priors
+non_hold_nb = 1.0 - nz(nb_p_hold)/100.0
+tur_nb      = f_clip(nz(nb_turb)/100.0, 0.0, 1.0)
+lam_nb      = f_clip((nz(nb_p_hold)/100.0) * (1.0 - tur_nb), 0.0, 1.0)
+rem_nb      = f_clip(1.0 - tur_nb - lam_nb, 0.0, 1.0)
+bal_dir_nb  = 1.0 - math.abs(nz(nb_dir_up)/100.0 - 0.5)*2.0
+conv_nb     = f_clip(rem_nb * (0.65*non_hold_nb + 0.35*bal_dir_nb), 0.0, rem_nb)
+dis_nb      = f_clip(1.0 - tur_nb - lam_nb - conv_nb, 0.0, 1.0)
+
+//──────────────────── HUD LABEL ────────────────────
+var label phaseLbl = na
+
+if barstate.islast
+    label.delete(phaseLbl)
+    modeTxt = (auto_mode ? "AUTO" : "MAN") + " / RV:" + (auto_rv ? "AUTO" : "MAN")
+
+    // Base text (core info)
+    string txt = "TF: " + calc_tf + "  (" + modeTxt + ")" +
+          "\nPhase: " + phase +
+          "\nATR%: " + str.tostring(atrp * 100, "#.2") + " | RV: " + str.tostring(vol_rel, "#.2") +
+          "\nBands ATR% (L/C/T): " +
+          str.tostring(lam_atr*100, "#.2") + " / " + str.tostring(conv_atr*100, "#.2") + " / " + str.tostring(tur_atr*100, "#.2") +
+          "\nBands RV (L/C/T): " +
+          str.tostring(lam_rv, "#.2") + " / " + str.tostring(conv_rv, "#.2") + " / " + str.tostring(turb_rv, "#.2") +
+          "\nFlow odds — Vent↓ " + str.tostring(p_dn, "#.0") + "%  |  Hold◼︎ " + str.tostring(p_hold, "#.0") + "%  |  Ignite↑ " + str.tostring(p_up, "#.0") + "%" +
+          "\nTurbBurst: " + str.tostring(turb_prob, "#.0") + "%  |  Bias: " + dir_txt + " (" + str.tostring(dir_prob_up, "#.0") + "% up)" +
+          "\n(Energy " + str.tostring(energy*100, "#.0") + "%  | ATR→Turb " + str.tostring(dist_atr*100, "#.0") + "%  | RV→Turb " + str.tostring(dist_rv*100, "#.0") + "%)" +
+          "\n(Streak " + str.tostring(lam_streak) + ", RVz " + str.tostring(rv_z_raw, "#.2") + ", ΔATR% " + str.tostring(atr_slope*100, "#.2") + ")"
+
+    // Live projected t+1 (may repaint)
+    string live_txt = "\nLive t+1 (proj) — Turb " + str.tostring(live_tur*100, "#.0") + "% | Conv " + str.tostring(live_conv*100, "#.0") +
+               "% | Lam " + str.tostring(live_lam*100, "#.0") + "% | Dis " + str.tostring(live_dis*100, "#.0") +
+               "% | Ignite↑ " + str.tostring(p_up, "#.0") + "% | Hold◼︎ " + str.tostring(p_hold, "#.0") +
+               "% | Vent↓ " + str.tostring(p_dn, "#.0") + "% | BiasUp " + str.tostring(dir_prob_up, "#.0") + "%"
+
+    // Frozen t+1 (non-repainting)
+    frozen_ready = not na(nb_p_up) and not na(nb_p_dn) and not na(nb_p_hold) and not na(nb_turb) and not na(nb_dir_up)
+
+    string nb_txt = ""
+    if frozen_ready
+        nb_txt := "\nNext-bar t+1 (frozen) — Turb " + str.tostring(tur_nb*100, "#.0") + "%  |  Conv " + str.tostring(conv_nb*100, "#.0") +
+                  "%  |  Lam " + str.tostring(lam_nb*100, "#.0") + "%  |  Dis " + str.tostring(dis_nb*100, "#.0") + "%" +
+                  "\nNext Ignite↑ " + str.tostring(nb_p_up, "#.0") + "%  |  Hold◼︎ " + str.tostring(nb_p_hold, "#.0") +
+                  "%  |  Vent↓ " + str.tostring(nb_p_dn, "#.0") + "%  |  BiasUp " + str.tostring(nb_dir_up, "#.0") + "%"
+    else
+        nb_txt := "\nNext-bar t+1 (frozen) — Turb – | Conv – | Lam – | Dis – | Ignite↑ – | Hold◼︎ – | Vent↓ – | BiasUp –"
+
+    // Combine all layers
+    string txt_full = txt + live_txt + nb_txt
+
+    // Draw HUD label  ✅ ← keep indented under “if”
+    phaseLbl := label.new(bar_index, close, txt_full, 
+         style = label.style_label_left, 
+         color = color.new(color.black, 0), 
+         textcolor = color.white)
